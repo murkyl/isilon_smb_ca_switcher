@@ -2,7 +2,7 @@
 This script allows you to easily change an SMB share's continuous availability feature on and off. This script works with OneFS versions 8.0 and above and works both on and off cluster.
 
 ## Why is something like this necessary?
-OneFS, like Windows Server, can only enable the CA (continuous availability) feature during share creation. Once a share is created it is not possible to alter the CA feature flag without first deleting the share and creating it anew. THe problem with doing this manually is that any slight customizations to the share would have to be re-created on the new share as well and this could be troublesome especially if you have a lot of shares to work through.
+OneFS, like Windows Server, can only enable the CA (continuous availability) feature during share creation. Once a share is created it is not possible to alter the CA feature flag without first deleting the share and creating it anew. The problem with doing this manually is that any slight customizations to the share would have to be re-created on the new share as well and this could be troublesome especially if you have a lot of shares to work through.
 
 ## Usage
 The script needs to be run at least 2 times to modify the SMB shares. The first time the script is run, it will dump all the existing SMB shares including which Access Zone they belong to into 2 sections. One section for normal SMB shares and a second section for shares that already have the Continuous Availability feature enabled. Each share is written to its own line.
@@ -49,19 +49,19 @@ Edit the smblist.txt file and save as a new file smblist_modified.txt
     python smb_ca_switch.py -u api_user -p password -s fqdn_or_ip_of_cluster -o smblist.txt
     
 ### CLI options
-Option|Description
-------|-----------
--u, --user|Optional user name to authenticate to the Isilon cluster. Used for off cluster execution. If user is not specified the script will prompt.
--p, --password|Optional password for the user specified above. Used for off cluster execution. If password is not specified the script will prompt.
--s, --server|IP or FQDN of a cluster IP for the script to connect.
--o, --output|When present, the script will output the current SMB share configuration to the file specified here.
--i, --input|When present, the script will perform a share update using the data in the file to alter SMB shares as necessary.
+Option           |Description
+-----------------|-----------
+-u, --user       |Optional user name to authenticate to the Isilon cluster. Used for off cluster execution. If user is not specified the script will prompt.
+-p, --password   |Optional password for the user specified above. Used for off cluster execution. If password is not specified the script will prompt.
+-s, --server     |IP or FQDN of a cluster IP for the script to connect.
+-o, --output     |When present, the script will output the current SMB share configuration to the file specified here.
+-i, --input      |When present, the script will perform a share update using the data in the file to alter SMB shares as necessary.
 --ignore_mismatch|If the input file does not match the current cluster shares exactly the script normally aborts. When this flag is present the script will continue and do whatever work it can.
---pretend|If present, the script will not alter any SMB shares, but just output what it would do.
--l, --log|Path to a log file.
---console_log|Output log to the console along with a possible file.
--q, --quiet|Minimize screen output.
---debug|Can be specified once or twice. One --debug will turn on INFO level messages while 2 --debug will turn on full debugging.
+--pretend        |If present, the script will not alter any SMB shares, but just output what it would do.
+-l, --log        |Path to a log file.
+--console_log    |Output log to the console along with a possible file.
+-q, --quiet      |Minimize screen output.
+--debug          |Can be specified once or twice. One --debug will turn on INFO level messages while 2 --debug will turn on full debugging.
 
 ## Notes
 The script will rename the original share to <sharename>_todelete first. Then it creates the new share with the CA option toggled. Finally it will delete the renamed share.
