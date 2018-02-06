@@ -515,8 +515,7 @@ def main():
   DEFAULT_LOG_FORMAT = '%(asctime)s - %(module)s|%(funcName)s - %(levelname)s [%(lineno)d] %(message)s'
 
   # Create our command line parser. We use the older optparse library for compatibility on OneFS
-  parser = optparse.OptionParser(usage=USAGE, version=u"%prog v" + __version__ + " (" + __date__ + ")",
-                  )#formatter=OptFormatter.IndentedHelpFormatterWithNL())
+  parser = optparse.OptionParser(usage=USAGE, version=u"%prog v" + __version__ + " (" + __date__ + ")")
   AddParserOptions(parser)
   (options, args) = parser.parse_args(sys.argv[1:])
   if (options.log is None) and (not options.quiet):
