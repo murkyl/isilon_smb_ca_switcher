@@ -1,0 +1,7 @@
+[NORMAL_SHARES]
+System,TestShare1,/ifs,
+AnotherZoneName,TestShare2,/ifs/data,Optional description of share in AnotherZoneName
+
+[CA_SHARES]
+System,ifs,/ifs,Isilon OneFS
+TestZone,TestShare,/ifs/testzone,This share should be a CA enabled share
