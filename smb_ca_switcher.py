@@ -32,29 +32,37 @@ import json
 import collections
 import logging
 import optparse
-import csv
 import getpass
 import httplib
+from urlparse import urlunsplit
+from urlparse import urljoin
+from urllib import urlencode
 import ssl
+import csv
 
 # Global logging object
 l = None
 # Flag to determine if we use internal API or actually perform HTTP request
-API_TYPE = 0
+API_ONCLUSTER = 0
 # Cached user credentials for HTTP request
 USER = None
 PASSWORD = None
 SERVER = None
 SESSION = None
-MAX_SMB_SHARE_LIMIT = 5000
-DEFAULT_API_TIMEOUT = 60
-NORMAL_SHARE_STRING = "[NORMAL_SHARES]"
-CA_SHARE_STRING = "[CA_SHARES]"
-URI_PAPI_SMB_SHARES = "3/protocols/smb/shares"
-if "OneFS" in platform.system():
-  API_TYPE = 1
-  import isi.rest
+MAX_RECORDS_LIMIT = 1000
+DEFAULT_API_TIMEOUT = 300
+URL_PAPI_SESSION = '/session/1/session'
+URL_PAPI_PLATFORM_PREFIX = '/platform/%s'
+URL_PAPI_SMB_SHARES = '3/protocols/smb/shares'
+URL_PAPI_ZONES = '3/zones'
+NORMAL_SHARE_STRING = '[NORMAL_SHARES]'
+CA_SHARE_STRING = '[CA_SHARES]'
 CSV_FIELDS_1 = ['zone', 'name', 'path', 'desc']
+RENAME_SUFFIX = '_todelete'
+
+if "OneFS" in platform.system():
+  API_ONCLUSTER = 1
+  import isi.rest
 
 
 def AddParserOptions(parser):
@@ -106,67 +114,6 @@ def AddParserOptions(parser):
                     help="Add multiple debug flags to increase debug. Warning are printed automatically unless suppressed by --quiet.\n"
                       "1: Info, 2: Debug")
 
-def rest_call(uri, method=None, query_args=None, headers=None, body=None, timeout=DEFAULT_API_TIMEOUT):
-  """Perform a REST call either using HTTPS or when run on an Isilon cluster,
-  use the internal PAPI socket path.
-  
-  uri: Can be a full URL string with slashes or an array of string with no slashes
-  method: HTTP method. GET, POST, PUT, DELETE, etc.
-  query_args: Dictionary of key value pairs to be appended to the URI
-  headers: Optional dictionary used to override HTTP headers
-  body: Data to be put into the request body
-  timeout: Number of seconds to wait for command to complete. Only used for the
-    internal REST call"""
-  global API_TYPE
-  global USER
-  global PASSWORD
-  global SESSION
-  global SERVER
-  
-  response = None
-  method = 'GET' if not method else method
-  query_args = {} if not query_args else convert(query_args)
-  headers = {} if not headers else headers
-  body = '' if not body else body
-  remote_uri = uri
-  l.debug("REST Call params: Method: %s / Query Args: %s / URI: %s"%(method, json.dumps(query_args), remote_uri))
-  if isinstance(uri, (unicode, str)):
-    remote_uri = uri.split('/')
-  if API_TYPE:
-    response = isi.rest.send_rest_request(
-      socket_path = isi.rest.PAPI_SOCKET_PATH,
-      method = method,
-      uri = remote_uri,
-      query_args = query_args,
-      headers = headers,
-      body = body,
-      timeout = timeout)
-  else:
-    try:
-      # Get session cookie for the cluster
-      if SESSION is None:
-        headers = {"Content-type": "application/json", "Accept": "application/json"}
-        conn = httplib.HTTPSConnection(SERVER)
-        data = json.dumps({'username': USER, 'password': PASSWORD, 'services': ['platform']})
-        conn.request('POST', '/session/1/session', data, headers)
-        resp = conn.getresponse()
-        l.debug(resp.read())
-        l.debug(resp.getheaders())
-        cookie = resp.getheader('set-cookie')
-        SESSION = cookie.split(';')[0]
-        conn.close()
-      # Send request over HTTPS
-      headers = {"Cookie": SESSION, "Content-type": "application/json", "Accept": "application/json"}
-      conn = httplib.HTTPSConnection(SERVER)
-      conn.request('GET', '/platform/%s'%'/'.join(remote_uri), headers=headers)
-      resp = conn.getresponse()
-      response = [resp.status, resp.reason, resp.read()]
-      conn.close()
-    except IOError as ioe:
-      if ioe.errno == 111:
-        raise Exception("Could not connect to server: %s. Check address and port."%SERVER)
-  return response
-
 def convert(data):
   """Changes any unicode strings in the input data to utf-8 strings. This does
   recursively go through the data structure."""
@@ -179,6 +126,126 @@ def convert(data):
   else:
     return data
         
+def get_papi_session(server, user, password):
+  """Connects to a OneFS cluster and gets a PAPI session cookie"""
+  headers = {"Content-type": "application/json", "Accept": "application/json"}
+  conn = httplib.HTTPSConnection(server)
+  data = json.dumps({'username': user, 'password': password, 'services': ['platform']})
+  try:
+    conn.request('POST', URL_PAPI_SESSION, data, headers)
+  except IOError as ioe:
+    if ioe.errno == 61:
+      l.critical("Could not connect to the server. Check the URL including port number. Port 8080 is default.")
+      sys.exit(2)
+  except Exception as e:
+    l.exception(e)
+    sys.exit(3)
+  resp = conn.getresponse()
+  l.debug(resp.read())
+  l.debug(resp.getheaders())
+  cookie = resp.getheader('set-cookie')
+  conn.close()
+  return (cookie.split(';')[0])
+
+def rest_call(url, method=None, query_args=None, headers=None, body=None, timeout=DEFAULT_API_TIMEOUT):
+  """Perform a REST call either using HTTPS or when run on an Isilon cluster,
+  use the internal PAPI socket path.
+  
+  url: Can be a full URL string with slashes or an array of string with no slashes
+  method: HTTP method. GET, POST, PUT, DELETE, etc.
+  query_args: Dictionary of key value pairs to be appended to the URL
+  headers: Optional dictionary used to override HTTP headers
+  body: Data to be put into the request body
+  timeout: Number of seconds to wait for command to complete. Only used for the
+    internal REST call"""
+  global API_ONCLUSTER
+  global USER
+  global PASSWORD
+  global SESSION
+  global SERVER
+  
+  resume = True
+  response_list = []
+  method = 'GET' if not method else method
+  query_args = {} if not query_args else convert(query_args)
+  headers = {} if not headers else headers
+  body = '' if not body else body
+  remote_url = url
+  l.debug("REST Call params: Method: %s / Query Args: %s / URL: %s"%(method, json.dumps(query_args), remote_url))
+  if isinstance(url, (unicode, str)):
+    remote_url = url.split('/')
+  if API_ONCLUSTER:
+    while resume:
+      data = isi.rest.send_rest_request(
+        socket_path = isi.rest.PAPI_SOCKET_PATH,
+        method = method,
+        uri = remote_url,
+        query_args = query_args,
+        headers = headers,
+        body = body,
+        timeout = timeout)
+      if data and data[0] >= 200 and data[0] < 300:
+        l.debug("REST call response: %s"%data[0])
+        try:
+          resume = json.loads(data[2])['resume']
+          l.debug("Resume key: %s"%resume)
+          query_args = {'resume': str(resume) or ''}
+        except Exception as e:
+          resume = False
+        response_list.append(data)
+      else:
+        resume = False
+        raise Exception("Error occurred getting data from cluster. Error code: %d"%data[0])
+  else:
+    try:
+      if SESSION is None:
+        SESSION = get_papi_session(SERVER, USER, PASSWORD)
+      headers["Cookie"] = SESSION
+      headers["Content-type"] = "application/json"
+      headers["Accept"] = "application/json"
+      while resume:
+        url = urlunsplit(['', '', URL_PAPI_PLATFORM_PREFIX%'/'.join(remote_url), urlencode(query_args), None])
+        l.debug("Method: %s"%method)
+        l.debug("URL: %s"%url)
+        l.debug("Headers: %s"%headers)
+        # Send request over HTTPS
+        conn = httplib.HTTPSConnection(SERVER)
+        conn.request(method, url, body, headers=headers)
+        resp = conn.getresponse()
+        l.debug("HTTPS response code: %d"%resp.status)
+        if resp and resp.status >= 200 and resp.status < 300:
+          data = resp.read()
+          try:
+            resume = json.loads(data)['resume']
+            l.debug("Resume key: %s"%resume)
+            query_args = {'resume': str(resume) or ''}
+          except Exception as e:
+            resume = False
+          response_list.append([resp.status, resp.reason, data])
+        else:
+          resume = False
+          raise Exception("Error occurred getting data from cluster. Error code: %d"%resp.status)
+      conn.close()
+    except IOError as ioe:
+      if ioe.errno == 111:
+        raise Exception("Could not connect to server: %s. Check address and port."%SERVER)
+  # Combine multiple responses into 1
+  response = response_list[0]
+  try:
+    json_data = json.loads(response[2])
+  except:
+    json_data = ''
+  if len(response_list) > 1:
+    keys = json_data.keys()
+    keys.remove('total')
+    keys.remove('resume')
+    if len(keys) > 1:
+      raise Exception("More keys remaining in REST call response than we expected: %s"%keys)
+    key = keys[0]
+    for i in range(1, len(response_list)):
+      json_data[key] = json_data[key] + json.loads(response_list[i][2])[key]
+  return (response[0], response[1], json_data)
+
 def filter_data(data, type, clone=False):
   """Remove any keys that are invalid as input to the OneFS PAPI. Removal is
   performed based on the type, a plain text string, passed in."""
@@ -193,10 +260,10 @@ def filter_data(data, type, clone=False):
   
 def get_zones():
   """Returns all the configured Access Zones on an Isilon cluster."""
-  response = rest_call('3/zones')
+  response = rest_call(URL_PAPI_ZONES)
   zones = {}
   if response and response[0] == 200:
-    json_data = json.loads(response[2])
+    json_data = response[2]
     zones = sorted(json_data['zones'], key=lambda x: x['id'])
   else:
     raise Exception('Unable to gather access zones from cluster')
@@ -223,12 +290,12 @@ def get_smb_shares():
     q_args = {
       'zone': str(zone['id']),
       'resolve_names': 'False',
-      'limit': str(MAX_SMB_SHARE_LIMIT),
+      'limit': str(MAX_RECORDS_LIMIT),
     }
-    response = rest_call(URI_PAPI_SMB_SHARES, query_args=q_args)
+    response = rest_call(URL_PAPI_SMB_SHARES, query_args=q_args)
     l.debug(response)
     if response and response[0] == 200:
-      json_data = json.loads(response[2])
+      json_data = response[2]
       shares = sorted(json_data['shares'], key=lambda x: x['name'])
       for share in shares:
         zone_shares.append({
@@ -256,10 +323,25 @@ def create_share(share, options):
   l.info("Creating share: %s - %s, CA: %s"%(share['zone'], share['name'], share['raw']['continuously_available']))
   if not options.pretend:
     data = filter_data(share['raw'], 'create_smb_share')
-    response = rest_call(URI_PAPI_SMB_SHARES, method='POST', body=json.dumps(data), query_args={'zone': share['zone']})
+    response = rest_call(URL_PAPI_SMB_SHARES, method='POST', body=json.dumps(data), query_args={'zone': share['zone']})
     l.debug(response)
     if response and response[0] == 201:
       l.info("Share created")
+  
+def rename_share(share, new_name, options):
+  """Renames an SMB share so that it has a special suffix
+  
+  The share should be a dictionary with the following keys:
+  
+  name: Name of the SMB share
+  zone: Name of the access zone the share belongs"""
+  l.info("Renaming share: %s - %s, CA: %s to %s"%(share['zone'], share['name'], share['raw']['continuously_available'], new_name))
+  if not options.pretend:
+    data = {'name': new_name}
+    response = rest_call('%s/%s'%(URL_PAPI_SMB_SHARES, share['name'].encode('utf-8')), method='PUT', body=json.dumps(data), query_args={'zone': share['zone'].encode('utf-8')})
+    l.debug(response)
+    if response and response[0] == 204:
+      l.info("Share renamed")
   
 def delete_share(share, options):
   """Deletes an SMB share from OneFS.
@@ -270,7 +352,7 @@ def delete_share(share, options):
   zone: Name of the access zone the share belongs"""
   l.info("Deleting share: %s - %s, CA: %s"%(share['zone'], share['name'], share['raw']['continuously_available']))
   if not options.pretend:
-    response = rest_call('%s/%s'%(URI_PAPI_SMB_SHARES, share['name'].encode('utf-8')), method='DELETE', query_args={'zone': share['zone'].encode('utf-8')})
+    response = rest_call('%s/%s'%(URL_PAPI_SMB_SHARES, share['name'].encode('utf-8')), method='DELETE', query_args={'zone': share['zone'].encode('utf-8')})
     l.debug(response)
     if response and response[0] == 204:
       l.info("Share deleted")
@@ -365,13 +447,19 @@ def update_smb_shares(shares, cur_shares, cur_ca_shares, tgt_shares, tgt_ca_shar
       l.warn("Share mismatches found. Processing shares from input file only.")
   # Do the actual work of deleting a share then recreating it with the CA flag flipped
   for x in to_smb_list:
-    delete_share(x, options)
+    new_name = x['name'] + RENAME_SUFFIX
+    rename_share(x, new_name, options)
     x['raw']['continuously_available'] = False
     create_share(x, options)
-  for x in to_ca_list:
+    x['name'] = new_name
     delete_share(x, options)
+  for x in to_ca_list:
+    new_name = x['name'] + RENAME_SUFFIX
+    rename_share(x, options)
     x['raw']['continuously_available'] = True
     create_share(x, options)
+    x['name'] = new_name
+    delete_share(x, options)
   
 def parse_input_init(state):
   """Initialize a state object for the input parser"""
@@ -421,7 +509,7 @@ def main():
   global USER
   global PASSWORD
   global SERVER
-  global API_TYPE
+  global API_ONCLUSTER
   
   USAGE =  "usage: %prog [options]"
   DEFAULT_LOG_FORMAT = '%(asctime)s - %(module)s|%(funcName)s - %(levelname)s [%(lineno)d] %(message)s'
@@ -434,15 +522,6 @@ def main():
   if (options.log is None) and (not options.quiet):
     options.console_log = True
     
-  if options.user:
-    USER = options.user
-  else:
-    USER = getpass.getuser()
-    sys.stderr.write("Using default user: %s\n"%USER)
-  if not options.password and API_TYPE == 0:
-    PASSWORD = getpass.getpass()
-  SERVER=options.server
-
   # Setup logging
   l = logging.getLogger()
   debug_count = options.debug
@@ -462,6 +541,20 @@ def main():
     l.addHandler(log_handler)
   if (options.log is None) and (options.console_log is False):
     l.addHandler(logging.NullHandler())
+  
+  if options.user:
+    API_ONCLUSTER = 0
+  if not API_ONCLUSTER:
+    if options.user:
+      USER = options.user
+    else:
+      l.info("Using default user: %s\n"%USER)
+      USER = getpass.getuser()
+    if options.password:
+      PASSWORD = options.password
+    else:
+      PASSWORD = getpass.getpass()
+    SERVER = options.server
 
   # Read all SMB shares from an Isilon cluster and break them into a list of CA and non-CA shares
   shares = get_smb_shares()

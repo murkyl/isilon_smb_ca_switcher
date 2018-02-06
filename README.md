@@ -46,7 +46,6 @@ Edit the smblist.txt file and save as a new file smblist_modified.txt
 
 Edit the smblist.txt file and save as a new file smblist_modified.txt
 
-
     python smb_ca_switch.py -u api_user -p password -s fqdn_or_ip_of_cluster -o smblist.txt
     
 ### CLI options
@@ -63,10 +62,13 @@ Option|Description
 --console_log|Output log to the console along with a possible file.
 -q, --quiet|Minimize screen output.
 --debug|Can be specified once or twice. One --debug will turn on INFO level messages while 2 --debug will turn on full debugging.
+
+## Notes
+The script will rename the original share to <sharename>_todelete first. Then it creates the new share with the CA option toggled. Finally it will delete the renamed share.
+This is done to ensure that if there is a problem with the script or an issue with cluster communication, any changes can be salvaged. A search for a share with the _todelete suffix will be where the script had an error. You can rename the share back to the original name and try again.
     
 ## Limitations and assumptions
 * This script only works with OneFS versions 8.0 and above.
-* The script currently will only work with a number of shares up to 5000. To go beyond this the code needs to be modified to ask for more shares than the initial 5000.
 * When running the script on cluster, the currently user context will be used to for PAPI access.
 
 ## Authors
