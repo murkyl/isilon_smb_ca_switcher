@@ -60,6 +60,7 @@ Option           |Description
 --pretend        |If present, the script will not alter any SMB shares, but just output what it would do.
 -l, --log        |Path to a log file.
 --console_log    |Output log to the console along with a possible file.
+-v, --verbose    |Output a message every 10 shares processed on remaining number of shares to process. Useful for large SMB share convresions.
 -q, --quiet      |Minimize screen output.
 --debug          |Can be specified once or twice. One --debug will turn on INFO level messages while 2 --debug will turn on full debugging.
 
