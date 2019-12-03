@@ -77,7 +77,7 @@ def AddParserOptions(parser):
                     default=False,
                     help="Allow updating SMB shares even when input file does not match with existing config.")
   group = optparse.OptionGroup(parser, "Logging and debug options")
-  parser.add_option("--pretend",
+  group.add_option("--pretend",
                     action="store_true",
                     default=False,
                     help="When this flag is enabled, the script will only output what it would do.")
@@ -89,6 +89,10 @@ def AddParserOptions(parser):
                     action="store_true",
                     default=False,
                     help="When this flag is set, log output to console. (Default: True if no other logging enabled and quiet is False)")
+  group.add_option("-v", "--verbose",
+                    action="store_true",
+                    default=False,
+                    help="Output status of SMB conversion.")
   group.add_option("-q", "--quiet",
                     action="store_true",
                     default=False,
@@ -223,6 +227,7 @@ def update_smb_shares(shares, cur_shares, cur_ca_shares, tgt_shares, tgt_ca_shar
   
   Shares in the current lists require the 'name', 'zone', 'path' and 'raw' keys.
   Shares in the target list can consist of only the 'name', 'zone' and 'path' keys"""
+  ll = logging.getLogger('update_smb_shares')
   to_ca_list = []
   to_smb_list = []
   extra_smb_list = []
@@ -274,7 +279,15 @@ def update_smb_shares(shares, cur_shares, cur_ca_shares, tgt_shares, tgt_ca_shar
     extra_ca_list.append(x)
   
   # Output a bunch of information about what we processed
-  log_lev = logging.DEBUG
+  
+  if options.debug > 1:
+    ll.setLevel(logging.DEBUG)
+  elif options.debug > 0 or options.verbose:
+    ll.setLevel(logging.INFO)
+  if options.verbose:
+    log_lev = logging.INFO
+  else:
+    log_lev = logging.DEBUG
   mismatch = False
   if options.pretend:
     l.log(100, "Only pretending to update shares")
@@ -300,6 +313,7 @@ def update_smb_shares(shares, cur_shares, cur_ca_shares, tgt_shares, tgt_ca_shar
     else:
       l.warn("Share mismatches found. Processing shares from input file only.")
   # Do the actual work of deleting a share then recreating it with the CA flag flipped
+  status_count = len(to_smb_list)
   for x in to_smb_list:
     new_name = x['name'] + RENAME_SUFFIX
     rename_share(PAPI_STATE, x, new_name, options)
@@ -307,6 +321,10 @@ def update_smb_shares(shares, cur_shares, cur_ca_shares, tgt_shares, tgt_ca_shar
     create_share(PAPI_STATE, x, options)
     x['name'] = new_name
     delete_share(PAPI_STATE, x, options)
+    status_count -= 1
+    if status_count % 10 == 0:
+      ll.info("Remaining shares to convert to non-CA: %s"%status_count)
+  status_count = len(to_ca_list)
   for x in to_ca_list:
     new_name = x['name'] + RENAME_SUFFIX
     rename_share(PAPI_STATE, x, new_name, options)
@@ -314,6 +332,9 @@ def update_smb_shares(shares, cur_shares, cur_ca_shares, tgt_shares, tgt_ca_shar
     create_share(PAPI_STATE, x, options)
     x['name'] = new_name
     delete_share(PAPI_STATE, x, options)
+    status_count -= 1
+    if status_count % 10 == 0:
+      ll.info("Remaining shares to convert to CA: %s"%status_count)
   
 def parse_input_init(state):
   """Initialize a state object for the input parser"""

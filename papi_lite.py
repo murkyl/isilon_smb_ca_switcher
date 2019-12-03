@@ -206,6 +206,7 @@ def rest_call(state, url, method=None, query_args=None, headers=None, body=None,
     keys = json_data.keys()
     keys.remove('total')
     keys.remove('resume')
+    keys.remove('digest')
     if len(keys) > 1:
       raise Exception("More keys remaining in REST call response than we expected: %s"%keys)
     key = keys[0]
